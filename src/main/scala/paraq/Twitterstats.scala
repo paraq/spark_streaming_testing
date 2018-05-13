@@ -17,12 +17,12 @@ object Twitterstats
 	var firstTime = true
 	var t0: Long = 0
 	val bw = new BufferedWriter(new OutputStreamWriter(new FileOutputStream("twitterLog.txt"), "UTF-8"))
-	
-	// This function will be called periodically after each 5 seconds to log the output. 
-	// Elements of a are of type (lang, totalRetweetsInThatLang, idOfOriginalTweet, maxRetweetCount, minRetweetCount,RetweetCount,text)
-	def write2Log(a: Array[((Long,String,String,String,Long))])
-	{ // i have changed the write2lof function according to my convenience
-		//TweetID, TwitterUser, TextOfTweet, LanguageOftweet, TotalRetweetCount
+	var window : Int = 0
+	// This function will be called periodically after each batch interval seconds to log the output.
+
+	def write2Log(a: Array[((Long,String,String,Long))])
+	{ //
+		//Elapsed seconds, TweetID , LanguageOftweet, TotalRetweetCount, TextOfTweet
 		if (firstTime)
 		{
 			bw.write("Seconds,TweetID, TwitterUser, TextOfTweet, LanguageOftweet, TotalRetweetCount\n")
@@ -33,9 +33,9 @@ object Twitterstats
 		{
 			val seconds = (System.currentTimeMillis - t0) / 1000
 			
-			if (seconds < 60)
+			if (seconds < window)
 			{
-				println("Elapsed time = " + seconds + " seconds. Logging will be started after 60 seconds.")
+				println("Elapsed time = " + seconds + " seconds. Logging will be started after "+window+" seconds.")
 				return
 			}
 			
@@ -44,10 +44,9 @@ object Twitterstats
 			for(i <-0 until a.size)
 			{
 				val id = a(i)._1
-				val username = a(i)._2
-				val textStr = a(i)._3.replaceAll("\\r|\\n", " ")	//removing new line characters from the text
-				val lang = getLangName(a(i)._4)
-				val retweetCount = a(i)._5
+				val textStr = a(i)._2.replaceAll("\\r|\\n", " ")	//removing new line characters from the text
+				val lang = getLangName(a(i)._3)
+				val retweetCount = a(i)._4
 				
 				
 				
@@ -80,57 +79,41 @@ object Twitterstats
   
 	// Gets Language's name from its code
 	def getLangName(code: String) : String =
-	{
+	{	if (code == "inv") return "No text available"
 		return new Locale(code).getDisplayLanguage(Locale.ENGLISH)
 	}
 
-	val reduce = (x: (String,String,String,Long,Long), y: (String,String,String,Long,Long)) => {
+	//get max and min values of retweetcount of tweets within window
+	val reduce = (x: (String,String,Long,Long), y: (String,String,Long,Long)) => {
    	//
-   	( y._1,y._2,y._3,math.max(x._4, y._4),math.min(x._5, y._5))	
-   	/*	reduce function will give following output from current and previous values of (langcode,langname,Maxretweetcount,Minretweetcount,text)
-	langcode,langname and text=> function will select respective current values
-	 Maxretweetcount =>  math.max(x._3, y._3) , it will select grater value between current and previous retweetcount
-	 Minretweetcount =>  math.min(x._4, y._4) , it will select smaller value between current and previous retweetcount
-	 */
+   	( y._1,y._2,math.max(x._3, y._3),math.min(x._4, y._4))
+
 	
 	}
-	
-	/*	filterTweets function can be used to filter out tweets
-	 * 
-	 */
+
+	// Only select more than 500 retweeted tweets
 	def filterTweets (tweet: twitter4j.Status) : Boolean =
 	{	
-		if (tweet.isRetweet()) return true else return false
+		if (tweet.isRetweet() && tweet.getRetweetedStatus().getRetweetCount() > 500) return true else return false
 		
 		
 	}
 	
 	
-	/*	map function to get desired format:
-	 * (TweetID,(LangCode,TotalRetweetCout,TotalRetweetCout,TweetText))
-	 * 
-	 * out
-	 * TweetID, TwitterUser, TextOfTweet, LanguageOftweet, TotalRetweetCount
-	 * 
-	 * 
-	 * class MyClass {
-  def func1(s: String): String = { ... }
-  def doStuff(rdd: RDD[String]): RDD[String] = { rdd.map(func1) }
-}
-	 * (TweetID, (TwitterUser, TextOfTweet, LanguageOftweet, TotalRetweetCount, TotalRetweetCount ))
-	 * 
-	 */
-	def initMap (tweet: twitter4j.Status) : (Long,(String,String,String,Long,Long)) =
+
+	// maps twitter4j.Status to (TweetID, (TextOfTweet, LanguageOftweet, TotalRetweetCount, TotalRetweetCount ))
+	def initMap (tweet: twitter4j.Status) : (Long,(String,String,Long,Long)) =
 	{
-		return (tweet.getRetweetedStatus().getId(),(tweet.getRetweetedStatus().getUser().getName(),tweet.getText(),
-		getLang(tweet.getRetweetedStatus().getText()),tweet.getRetweetedStatus().getRetweetCount(),tweet.getRetweetedStatus().getRetweetCount()))
+		return (tweet.getRetweetedStatus().getId(),(tweet.getText(),getLang(tweet.getRetweetedStatus().getText()),
+			tweet.getRetweetedStatus().getRetweetCount(),tweet.getRetweetedStatus().getRetweetCount()))
 	}
 	
-	//TweetID, TwitterUser, TextOfTweet, LanguageOftweet, TotalRetweetCount
-	def finalMap (rdd: (Long,(String,String,String,Long,Long))) : (Long,String,String,String,Long) =
+	//TweetID, TextOfTweet, LanguageOftweet, TotalRetweetCount
+	// where TotalRetweetCount = max(retweetCount) - min(retweetCount) + 1
+	def finalMap (rdd: (Long,(String,String,Long,Long))) : (Long,String,String,Long) =
 	{
 		val values = rdd._2
-		return (rdd._1,values._1,values._2,values._3,values._4-values._5+1) 
+		return (rdd._1,values._1,values._2,values._3-values._4+1)
 	}
 	
 	
@@ -142,38 +125,40 @@ object Twitterstats
 		val apiSecret = "JFzxiXxNskhiE7D8t9Pn8qQbraDu8Qz10f2auhXIYEafqsOTXs"
 		val accessToken = " 784442412043296768-zrWqfEIy4zXF9aij0Tc9GaDo2Kiswiu"
 		val accessTokenSecret = " 8XaAqR9LOoJh7sKtkxqcNitdrA29qb6zOdaMBDKWNiaOU"
+
 		//authentication of twitter application
 		Helper.configureTwitterCredentials(apiKey, apiSecret, accessToken, accessTokenSecret)
-		
-		val ssc = new StreamingContext(new SparkConf(), Seconds(5))
+
+		//setting time interval, window and sliding time
+		val interval = args(0).toInt
+		window = args(1).toInt
+		val sliding = args(2).toInt
+
+		//create streaming context
+		val ssc = new StreamingContext(new SparkConf(), Seconds(interval))
 		val tweets = TwitterUtils.createStream(ssc, None)
 		
 		
 		//======================================================Transformations on Dstream=========================================
 
-		
+		//Filtering retweeted tweets
 		val filter_re = tweets.filter(filterTweets)
 		
 		
-		
+		//convert twitter4j.status into required tuple
 		val statuses = filter_re.map(initMap)
-		
 
-		
-		
-		val statuses_reduce=statuses.reduceByKeyAndWindow(reduce,Seconds(60), Seconds(5))
-		/* 
-		   
-		*/
+		//get maximum and minimum retweetcount of a tweet
+		val statuses_reduce=statuses.reduceByKeyAndWindow(reduce,Seconds(window), Seconds(sliding))
 
-			
-		val final_rdd = statuses_reduce.map(finalMap)
+		//calculate retweetcount during batch interval and sort according to retweet count
+		val final_rdd = statuses_reduce.map(finalMap).transform( rdd => rdd.sortBy(_._4,false))
 
-		
-		final_rdd.foreachRDD(rdd => write2Log(rdd.collect)) 
+		//write to log file
+		final_rdd.foreachRDD(rdd => write2Log(rdd.collect))
 	
 		new java.io.File("cpdir").mkdirs // make new directory for checkpoint
-		ssc.checkpoint("cpdir")// to enable periodic RDD checkpointing because reduceByKeyAndWindow is used in this application.Checkpoint is used get enough data so that storage can recover
+		ssc.checkpoint("cpdir")// to enable periodic RDD checkpointing.Checkpoint is used get enough data so that storage can recover
 					// from failures
 		ssc.start()
 		ssc.awaitTermination()
